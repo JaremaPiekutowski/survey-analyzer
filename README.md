@@ -1,4 +1,4 @@
-# Survey Analyzer — XLSX Survey Analysis Tool
+# Survey Analyzer — XLSX survey analysis tool (in development)
 
 A command-line tool for analyzing survey data from Excel (XLSX) files. Generates DOCX reports with charts and tables, XLSX statistics sheets, and comparison reports between survey groups.
 
@@ -144,3 +144,12 @@ python main.py report --help
 python main.py crosstab --help
 python main.py compare --help
 ```
+
+
+## To do
+- [ ] Add breakdown of questions by demographics/categorical variables
+- [ ] Add custom correlation analysis
+- [ ] Add customizable charts, tables
+- [ ] Add AI data analysis and text generation
+- [ ] Add frontend with user-friendly interface
+- the sky is the limit...
