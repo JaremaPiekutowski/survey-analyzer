@@ -1,0 +1,71 @@
+# Example Survey Analyzer configuration
+# Copy this file to config.yaml and adjust for your survey data.
+# See README.md for full documentation.
+#
+# Place your Excel survey files in the input/ folder, then run:
+#   python main.py detect input/survey.xlsx --output config.yaml
+#   python main.py report input/survey.xlsx --config config.yaml --output-dir output
+
+questions:
+  - id: 'D1'
+    label: 'D1. Respondent gender'
+    columns: [0]
+    column_labels:
+      - 'D1. Respondent gender'
+    question_type: single_choice
+    chart_type: pie
+    is_demographic: true
+
+  - id: 'D2'
+    label: 'D2. Age group'
+    columns: [1]
+    column_labels:
+      - 'D2. Age group'
+    question_type: single_choice
+    chart_type: frequency_bar
+    is_demographic: true
+
+  - id: 'Q1'
+    label: 'Q1. Trust in institutions (0-10 scale)'
+    columns: [2, 3, 4, 5]
+    column_labels:
+      - 'Government'
+      - 'Healthcare system'
+      - 'Education system'
+      - 'Media'
+    question_type: numeric_scale
+    chart_type: horizontal_bar_means
+    is_demographic: false
+    scale_min: 0
+    scale_max: 10
+
+  - id: 'Q2'
+    label: 'Q2. Agreement with statements (Likert scale)'
+    columns: [6, 7, 8]
+    column_labels:
+      - 'Statement A'
+      - 'Statement B'
+      - 'Statement C'
+    question_type: likert
+    chart_type: horizontal_bar_means
+    is_demographic: false
+    scale_min: 1
+    scale_max: 5
+    scale_labels:
+      1: 'Strongly disagree'
+      2: 'Disagree'
+      3: 'Neither agree nor disagree'
+      4: 'Agree'
+      5: 'Strongly agree'
+    special_values: [6, 7]  # e.g. "Don't know", "Refuse to answer"
+
+  - id: 'Q3'
+    label: 'Q3. Multiple choice - select all that apply'
+    columns: [9, 10, 11]
+    column_labels:
+      - 'Option A'
+      - 'Option B'
+      - 'Option C'
+    question_type: multiple_choice
+    chart_type: multiple_choice_bar
+    is_demographic: false
