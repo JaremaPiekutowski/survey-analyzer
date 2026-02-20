@@ -195,6 +195,38 @@ def cross_tab_frequencies(data_col: pd.Series, group_col: pd.Series,
     return ct_pct
 
 
+def chi_square_test(data_col: pd.Series, group_col: pd.Series,
+                    weights: Optional[pd.Series] = None) -> dict:
+    """
+    Chi-square test of independence between two categorical variables.
+    Returns dict with test name, statistic, p_value.
+    """
+    valid_mask = data_col.notna() & group_col.notna()
+    data_valid = data_col[valid_mask].astype(str).str.strip()
+    group_valid = group_col[valid_mask].astype(str).str.strip()
+    non_empty = (data_valid != '') & (group_valid != '')
+    data_valid = data_valid[non_empty]
+    group_valid = group_valid[non_empty]
+
+    if len(data_valid) < 5:
+        return {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
+
+    if weights is not None:
+        w = weights.loc[data_valid.index].fillna(1.0)
+        contingency = pd.crosstab(data_valid, group_valid, values=w, aggfunc='sum').fillna(0)
+    else:
+        contingency = pd.crosstab(data_valid, group_valid)
+
+    if contingency.shape[0] < 2 or contingency.shape[1] < 2:
+        return {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
+
+    try:
+        chi2, p, dof, expected = stats.chi2_contingency(contingency)
+        return {'test': 'chi2', 'statistic': round(float(chi2), 2), 'p_value': round(float(p), 4)}
+    except ValueError:
+        return {'test': 'chi2', 'statistic': np.nan, 'p_value': np.nan}
+
+
 def test_group_differences(data_col: pd.Series, group_col: pd.Series,
                            test_type: str = 'auto') -> dict:
     """

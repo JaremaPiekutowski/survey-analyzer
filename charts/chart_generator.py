@@ -261,6 +261,66 @@ def frequency_bar(freq_df: pd.DataFrame, title: str = "",
     return buf
 
 
+def stacked_bar_100(freq_pivot_df: pd.DataFrame, title: str = "",
+                    figsize: tuple = None, max_legend_items: int = 12) -> BytesIO:
+    """
+    100% stacked bar chart for cross-tabulated frequencies.
+    freq_pivot_df: rows = response categories, columns = demographic groups, values = %.
+    Each column sums to 100. One bar per demographic group.
+    """
+    df = freq_pivot_df.fillna(0)
+    n_groups = len(df.columns)
+    n_cats = len(df.index)
+
+    if figsize is None:
+        width = max(8, n_groups * 1.2 + 2)
+        figsize = (width, 6)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x_pos = np.arange(n_groups)
+    bar_width = 0.7
+
+    colors = CAT_PALETTE + PIE_PALETTE
+    bottom = np.zeros(n_groups)
+
+    for i, (cat_label, row) in enumerate(df.iterrows()):
+        vals = row.values
+        color = colors[i % len(colors)]
+        ax.bar(x_pos, vals, bar_width, bottom=bottom, label=_wrap_label(str(cat_label), 40),
+               color=color, edgecolor='white', linewidth=0.5)
+        bottom += vals
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([_wrap_label(str(c), 25) for c in df.columns],
+                       fontsize=FONT_TICK, rotation=25, ha='right')
+    ax.set_ylabel('%', fontsize=FONT_LABEL)
+    ax.set_ylim(0, 100)
+    ax.set_xlim(-0.5, n_groups - 0.5)
+
+    if n_cats <= max_legend_items:
+        ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=FONT_LEGEND - 1,
+                  frameon=False)
+    else:
+        ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=FONT_LEGEND - 2,
+                  frameon=False, ncol=min(2, (n_cats + 5) // 6))
+
+    if title:
+        ax.set_title(title, fontsize=FONT_TITLE, fontweight='bold',
+                     color=COLORS['text'], pad=15, loc='left')
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(axis='y', alpha=0.3)
+    ax.grid(axis='x', visible=False)
+
+    plt.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 def comparison_bar(stats_df1: pd.DataFrame, stats_df2: pd.DataFrame,
                    label1: str = "Świeccy", label2: str = "Duchowni",
                    title: str = "", value_col: str = 'Średnia',

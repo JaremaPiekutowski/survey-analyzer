@@ -5,6 +5,11 @@
 # Place your Excel survey files in the input/ folder, then run:
 #   python main.py detect input/survey.xlsx --output config.yaml
 #   python main.py report input/survey.xlsx --config config.yaml --output-dir output
+#   python main.py demographic-report input/survey.xlsx --config config.yaml --output-dir output
+#
+# categorical_questions: IDs of questions used as demographic breakdown dimensions
+# (e.g. gender, age, education). If omitted, questions with is_demographic: true are used.
+# categorical_questions: [D1, D2]
 
 questions:
   - id: 'D1'

@@ -360,7 +360,13 @@ def export_config(questions: list, output_path: str):
     logger.info(f"  Config exported to {output_path}")
 
 
-def load_config(config_path: str) -> list:
+def load_config(config_path: str) -> tuple[list, list | None]:
+    """
+    Load question config from YAML.
+    Returns (questions, categorical_questions).
+    categorical_questions is a list of question IDs to use as demographic breakdown dimensions,
+    or None if not specified (caller should fall back to is_demographic).
+    """
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     if not config or 'questions' not in config:
@@ -377,4 +383,7 @@ def load_config(config_path: str) -> list:
             is_demographic=qd.get('is_demographic', False),
         )
         questions.append(q)
-    return questions
+    categorical_ids = config.get('categorical_questions')
+    if categorical_ids is not None:
+        categorical_ids = [str(x).strip() for x in categorical_ids]
+    return (questions, categorical_ids)

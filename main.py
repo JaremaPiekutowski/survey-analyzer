@@ -8,6 +8,7 @@ Usage:
   python main.py report   <input.xlsx> [--config config.yaml] [--output-dir ./output]
   python main.py crosstab <input.xlsx> --config config.yaml --demographics M1,M2a,M3
   python main.py compare  <file1.xlsx> <file2.xlsx> --label1 "Laity" --label2 "Clergy"
+  python main.py demographic-report <input.xlsx> --config config.yaml [--output-dir ./output]
 """
 
 import argparse
@@ -26,10 +27,12 @@ from core.data_loader import (
 )
 from core.statistics import (
     descriptive_stats, frequency_table, multiple_choice_table,
-    cross_tab_means, cross_tab_frequencies
+    cross_tab_means, cross_tab_frequencies,
+    chi_square_test, test_group_differences
 )
 from charts.chart_generator import (
-    horizontal_bar_means, pie_chart, frequency_bar, comparison_bar
+    horizontal_bar_means, pie_chart, frequency_bar, comparison_bar,
+    stacked_bar_100
 )
 from reports.docx_builder import ReportBuilder
 from reports.xlsx_builder import XlsxReportBuilder
@@ -113,7 +116,7 @@ def cmd_report(args):
     config_path = _resolve_config_path(args.config) if args.config else None
     if config_path and config_path.exists():
         logger.info("Step 2/6: Loading question config from %s", config_path)
-        questions = load_config(str(config_path))
+        questions, _ = load_config(str(config_path))
         logger.info("Loaded %d questions from config", len(questions))
     else:
         if args.config:
@@ -240,7 +243,7 @@ def cmd_crosstab(args):
     config_path = _resolve_config_path(args.config) if args.config else None
     if config_path and config_path.exists():
         logger.info("Step 2/5: Loading config from %s", config_path)
-        questions = load_config(str(config_path))
+        questions, _ = load_config(str(config_path))
     else:
         if args.config:
             logger.warning("Config file not found: %s", config_path.resolve() if config_path else args.config)
@@ -317,6 +320,155 @@ def cmd_crosstab(args):
     logger.info("─── Cross-tab report saved to: %s ───", xlsx_path)
 
 
+def _significance_sentence(test_result: dict, demo_label: str, scale: bool = False) -> str:
+    """Format one-sentence summary of statistical significance."""
+    p = test_result.get('p_value', float('nan'))
+    stat = test_result.get('statistic', float('nan'))
+    test_name = test_result.get('test', '')
+    if pd.isna(p) or pd.isna(stat):
+        return f"Podział wg {demo_label}: Brak wystarczających danych do testu istotności."
+    sig = p < 0.05
+    stat_sym = 'χ²' if test_name == 'chi2' else ('H' if 'Kruskal' in test_name else 'U')
+    if scale:
+        diff_type = "średnich"
+    else:
+        diff_type = "rozkładzie odpowiedzi"
+    if sig:
+        return f"Podział wg {demo_label}: Istnieje istotna statystycznie różnica w {diff_type} ({stat_sym}={stat:.2f}, p={p:.4f})."
+    return f"Podział wg {demo_label}: Nie stwierdzono istotnej statystycznie różnicy w {diff_type} ({stat_sym}={stat:.2f}, p={p:.4f})."
+
+
+def cmd_demographic_report(args):
+    """Generate report with demographic/categorical breakdowns."""
+    logger.info("═══ DEMOGRAPHIC-REPORT: Raport z podziałem kategorialnym ═══")
+    input_path = _resolve_input_path(args.input)
+    logger.info("Step 1/6: Loading Excel file from %s", input_path)
+    df = load_xlsx(str(input_path), header_row=0)
+
+    config_path = _resolve_config_path(args.config) if args.config else None
+    if not config_path or not config_path.exists():
+        raise SystemExit("demographic-report requires --config with categorical_questions defined")
+    logger.info("Step 2/6: Loading config from %s", config_path)
+    questions, categorical_ids = load_config(str(config_path))
+    logger.info("Loaded %d questions from config", len(questions))
+
+    weight_col = None
+    for col in df.columns:
+        if str(col).lower().strip() in ('waga', 'weight', 'wagi'):
+            weight_col = col
+            break
+    weights = pd.to_numeric(df[weight_col], errors='coerce').fillna(1.0) if weight_col else None
+    if weight_col:
+        logger.info("Using weight column: %s", weight_col)
+
+    if categorical_ids:
+        cat_questions = [q for q in questions if q.id in categorical_ids]
+    else:
+        cat_questions = [q for q in questions if q.is_demographic]
+    if not cat_questions:
+        raise SystemExit("No categorical questions found. Add categorical_questions to config or use is_demographic: true.")
+    logger.info("Categorical dimensions: %s", [q.id for q in cat_questions])
+
+    data_questions = [q for q in questions if q.id not in {c.id for c in cat_questions}
+                     and q.question_type in (QT_NUMERIC_SCALE, QT_LIKERT, QT_SINGLE_CHOICE, QT_MULTI_CHOICE)]
+    logger.info("Data questions to analyze: %d", len(data_questions))
+
+    out_dir = Path(args.output_dir or 'output')
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = input_path.stem
+    report = ReportBuilder(title=args.title or f"Raport demograficzny: {stem}")
+    xlsx_report = XlsxReportBuilder()
+    logger.info("Step 3/6: Processing questions with demographic breakdowns...")
+
+    processed = 0
+    for data_q in data_questions:
+        report.add_section(f"{data_q.id}: {data_q.label[:80]}", level=2)
+
+        for demo_q in cat_questions:
+            demo_col_name = df.columns[demo_q.columns[0]]
+            demo_series = df[demo_col_name]
+            demo_label = f"{demo_q.id} ({demo_q.label[:40]}...)" if len(demo_q.label) > 40 else f"{demo_q.id} ({demo_q.label})"
+
+            if data_q.question_type in (QT_NUMERIC_SCALE, QT_LIKERT):
+                data = get_numeric_data(df, data_q, weight_col)
+                w = data.pop('_weight') if '_weight' in data.columns else weights
+                s_min = data_q.scale_min if data_q.scale_min is not None else 0
+                s_max = data_q.scale_max if data_q.scale_max is not None else 10
+                if data_q.question_type == QT_LIKERT and data_q.special_values:
+                    actual_max = max((v for v in range(1, s_max + 1) if v not in data_q.special_values), default=s_max)
+                    s_max = actual_max
+
+                for col_idx, item_label in enumerate(data_q.column_labels):
+                    if item_label.startswith('_'):
+                        continue
+                    item_col = data[item_label]
+                    ct = cross_tab_means(item_col, demo_series, w)
+                    if len(ct) < 2:
+                        continue
+                    test_res = test_group_differences(item_col, demo_series)
+                    chart_df = ct.rename(columns={'Kategoria': 'Item'})
+                    chart_buf = horizontal_bar_means(chart_df, title=f"{data_q.id} – {item_label[:50]}",
+                                                    scale_min=s_min, scale_max=s_max, value_col='Średnia')
+                    sub_title = f"{item_label[:60]} – podział wg {demo_q.id}"
+                    report.add_section(sub_title, level=3)
+                    report.add_table(ct, title="Średnie wg grup")
+                    report.add_chart(chart_buf, width=6.0)
+                    report.add_paragraph(_significance_sentence(test_res, demo_label, scale=True))
+                    sheet_name = f"{data_q.id}_{col_idx}x{demo_q.id}"[:31]
+                    xlsx_report.add_dataframe_sheet(ct, sheet_name, title=sub_title[:60])
+                    processed += 1
+
+            elif data_q.question_type == QT_SINGLE_CHOICE:
+                data_col_name = df.columns[data_q.columns[0]]
+                ct = cross_tab_frequencies(df[data_col_name], demo_series, weights)
+                if ct.empty or len(ct.columns) < 2:
+                    continue
+                test_res = chi_square_test(df[data_col_name], demo_series, weights)
+                chart_buf = stacked_bar_100(ct, title=f"{data_q.id} – podział wg {demo_q.id}")
+                sub_title = f"Podział wg {demo_q.id}"
+                report.add_section(sub_title, level=3)
+                ct_display = ct.reset_index()
+                report.add_table(ct_display, title="Częstości % wg grup")
+                report.add_chart(chart_buf, width=6.0)
+                report.add_paragraph(_significance_sentence(test_res, demo_label, scale=False))
+                sheet_name = f"{data_q.id}x{demo_q.id}"[:31]
+                xlsx_report.add_cross_tab_sheet(ct, sheet_name, title=f"{data_q.id} wg {demo_q.id}")
+                processed += 1
+
+            elif data_q.question_type == QT_MULTI_CHOICE:
+                data = get_numeric_data(df, data_q, weight_col)
+                w = data.pop('_weight') if '_weight' in data.columns else weights
+                for col_idx, item_label in enumerate(data_q.column_labels):
+                    if item_label.startswith('_'):
+                        continue
+                    item_series = (data[item_label] == 1).replace({True: 'Wskazano', False: 'Nie wskazano'})
+                    ct = cross_tab_frequencies(item_series, demo_series, w)
+                    if ct.empty or len(ct.columns) < 2:
+                        continue
+                    test_res = chi_square_test(item_series, demo_series, w)
+                    chart_buf = stacked_bar_100(ct, title=f"{data_q.id} – {item_label[:40]} wg {demo_q.id}")
+                    sub_title = f"{item_label[:50]} – podział wg {demo_q.id}"
+                    report.add_section(sub_title, level=3)
+                    ct_display = ct.reset_index()
+                    report.add_table(ct_display, title="Częstości % wg grup")
+                    report.add_chart(chart_buf, width=6.0)
+                    report.add_paragraph(_significance_sentence(test_res, demo_label, scale=False))
+                    sheet_name = f"{data_q.id}_{col_idx}x{demo_q.id}"[:31]
+                    xlsx_report.add_cross_tab_sheet(ct, sheet_name, title=sub_title[:60])
+                    processed += 1
+
+    docx_path = out_dir / f"{stem}_raport_demograficzny.docx"
+    xlsx_path = out_dir / f"{stem}_raport_demograficzny.xlsx"
+    logger.info("Step 4/6: Building DOCX report...")
+    report.save(str(docx_path))
+    logger.info("Step 5/6: Building XLSX report...")
+    xlsx_report.save(str(xlsx_path))
+    logger.info("─── Demographic report complete ───")
+    logger.info("DOCX: %s", docx_path)
+    logger.info("XLSX: %s", xlsx_path)
+    logger.info("Sections processed: %d", processed)
+
+
 def cmd_compare(args):
     """Generate comparison report for two surveys."""
     logger.info("═══ COMPARE: Comparing two surveys ═══")
@@ -326,6 +478,27 @@ def cmd_compare(args):
     df1 = load_xlsx(str(input1_path), header_row=0)
     logger.info("Step 2/5: Loading second survey from %s", input2_path)
     df2 = load_xlsx(str(input2_path), header_row=0)
+
+    weight_col1 = None
+    weight_col2 = None
+    for col in df1.columns:
+        if str(col).lower().strip() in ('waga', 'weight', 'wagi'):
+            weight_col1 = col
+            break
+    for col in df2.columns:
+        if str(col).lower().strip() in ('waga', 'weight', 'wagi'):
+            weight_col2 = col
+            break
+    weights1 = pd.to_numeric(df1[weight_col1], errors='coerce').fillna(1.0) if weight_col1 else None
+    weights2 = pd.to_numeric(df2[weight_col2], errors='coerce').fillna(1.0) if weight_col2 else None
+    if weight_col1:
+        logger.info("Survey 1: using weight column %s", weight_col1)
+    else:
+        logger.info("Survey 1: no weight column, unweighted")
+    if weight_col2:
+        logger.info("Survey 2: using weight column %s", weight_col2)
+    else:
+        logger.info("Survey 2: no weight column, unweighted")
 
     logger.info("Step 3/5: Auto-detecting questions in both surveys...")
     questions1 = auto_detect_questions(df1)
@@ -366,11 +539,13 @@ def cmd_compare(args):
         if best_match:
             matched += 1
             logger.info("  Matched [%s]: %s", q1.id, q1.label[:50])
-            data1 = get_numeric_data(df1, q1)
-            data2 = get_numeric_data(df2, best_match)
+            data1 = get_numeric_data(df1, q1, weight_col1)
+            data2 = get_numeric_data(df2, best_match, weight_col2)
+            w1 = data1.pop('_weight') if '_weight' in data1.columns else weights1
+            w2 = data2.pop('_weight') if '_weight' in data2.columns else weights2
 
-            stats1 = descriptive_stats(data1)
-            stats2 = descriptive_stats(data2)
+            stats1 = descriptive_stats(data1, w1)
+            stats2 = descriptive_stats(data2, w2)
 
             s_min = q1.scale_min or 0
             s_max = q1.scale_max or 10
@@ -436,6 +611,13 @@ def main():
     p_ct.add_argument('--demographics', '-g', required=True, help='Demographic vars (comma-separated)')
     p_ct.add_argument('--output-dir', '-d', default='output', help='Output directory')
 
+    # demographic-report
+    p_demo = subparsers.add_parser('demographic-report', help='Generate report with demographic breakdowns')
+    p_demo.add_argument('input', help='Input XLSX file (from input/ folder if bare filename)')
+    p_demo.add_argument('--config', '-c', required=True, help='Question config YAML with categorical_questions')
+    p_demo.add_argument('--output-dir', '-d', default='output', help='Output directory')
+    p_demo.add_argument('--title', '-t', help='Report title')
+
     # compare
     p_cmp = subparsers.add_parser('compare', help='Compare two surveys')
     p_cmp.add_argument('input1', help='First survey XLSX (from input/ folder if bare filename)')
@@ -458,6 +640,8 @@ def main():
         cmd_report(args)
     elif args.command == 'crosstab':
         cmd_crosstab(args)
+    elif args.command == 'demographic-report':
+        cmd_demographic_report(args)
     elif args.command == 'compare':
         cmd_compare(args)
 

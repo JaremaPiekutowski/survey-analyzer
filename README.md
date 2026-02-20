@@ -71,7 +71,15 @@ Generates:
 python main.py crosstab survey.xlsx --config config.yaml --demographics M1,M2a,M3
 ```
 
-### 4. Comparison report (two surveys)
+### 4. Demographic breakdown report
+
+```bash
+python main.py demographic-report survey.xlsx --config config.yaml --output-dir output
+```
+
+Generates a report with cross-tabulations by each categorical variable (e.g. gender, age, education). For each non-categorical question and each categorical dimension: crosstable, significance test (chi-square for categorical, Kruskal-Wallis for scales), 100% stacked bar or bar chart of means, and a one-sentence summary. Requires `categorical_questions` in config (or `is_demographic: true`).
+
+### 5. Comparison report (two surveys)
 
 ```bash
 python main.py compare laity.xlsx clergy.xlsx --label1 "Laity" --label2 "Clergy"
@@ -96,6 +104,9 @@ python main.py compare laity.xlsx clergy.xlsx --label1 "Laity" --label2 "Clergy"
 ## YAML Config Structure
 
 ```yaml
+# Optional: questions used as demographic breakdown dimensions
+categorical_questions: [M1, M2a, M10, M11]
+
 questions:
   - id: 'A1'
     label: 'A1. Full parent question text'
@@ -133,21 +144,22 @@ survey-analyzer/
     └── xlsx_builder.py     # XLSX report building
 ```
 
-## Documentation
+## Dokumentacja
 
-For detailed documentation, see the inline help:
+Pełna dokumentacja w folderze **[docs/](docs/README.md)** – opisy wszystkich komend i konfiguracji.
+
+Pomoc w linii poleceń:
 
 ```bash
 python main.py --help
 python main.py detect --help
 python main.py report --help
-python main.py crosstab --help
+python main.py demographic-report --help
 python main.py compare --help
 ```
 
 
 ## To do
-- [ ] Add breakdown of questions by demographics/categorical variables
 - [ ] Add custom correlation analysis
 - [ ] Add customizable charts, tables
 - [ ] Add AI data analysis and text generation
