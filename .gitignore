@@ -13,3 +13,15 @@ wheels/
 config/
 input/
 output/
+
+# any pdfs, docs, pptx, etc.
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+*.xls
+*.csv
+*.txt
+*.json
+*.yaml
+*.yml

@@ -33,9 +33,17 @@ Jeśli brak tej listy, używane są pytania z `is_demographic: true`.
 python main.py demographic-report ankieta_swieccy.xlsx --config swieccy_config_final.yaml
 ```
 
+## Pliki wyjściowe
+
+Osobny raport DOCX i XLSX dla **każdej** zmiennej kategorialnej. Nazwa pliku pochodzi z etykiety pytania (bez numeru):
+- `{nazwa}_raport_demograficzny_Plec_respondenta.docx` – podział wg płci
+- `{nazwa}_raport_demograficzny_Wiek_respondenta.docx` – podział wg wieku
+- `{nazwa}_raport_demograficzny_Wielkosc_miejscowosci_zamieszkania.docx` – podział wg miejscowości
+- itd.
+
 ## Co zawiera raport
 
-Dla każdego pytania nie-kategorialnego i każdej kategorii (np. M1 Płeć):
+Dla każdego pytania nie-kategorialnego w ramach danej kategorii (np. M1 Płeć):
 
 | Typ pytania | Tabela | Wykres | Test istotności |
 |-------------|--------|--------|-----------------|

@@ -4,6 +4,7 @@ Full label text (no truncation), large fonts, seaborn-inspired palettes.
 """
 
 import logging
+import textwrap
 from io import BytesIO
 
 import matplotlib
@@ -58,6 +59,14 @@ plt.rcParams.update({
 })
 
 
+def _wrap_title_text(text: str, max_chars_per_line: int = 64) -> str:
+    """Wrap chart title so one long line does not stretch figure width (bbox tight)."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    return textwrap.fill(t, width=max_chars_per_line, break_long_words=False, replace_whitespace=False)
+
+
 def _wrap_label(text: str, max_chars: int = 55) -> str:
     """Wrap long labels for axis display. Never truncate."""
     if len(text) <= max_chars:
@@ -99,13 +108,14 @@ def _div_color(val: float, vmin: float, vmax: float) -> tuple:
 def horizontal_bar_means(stats_df: pd.DataFrame, title: str = "",
                          scale_min: float = None, scale_max: float = None,
                          figsize: tuple = None, value_col: str = 'Średnia',
-                         colormap: str = 'sequential') -> BytesIO:
+                         colormap: str = 'sequential',
+                         row_spacing: float = 1.0, bar_height: float = 0.7) -> BytesIO:
     """Horizontal bar chart of means with full labels and color-coded bars."""
     df = stats_df.copy()
     n = len(df)
 
     if figsize is None:
-        height = max(4, n * 0.55 + 2.5)
+        height = max(4, n * 0.55 * row_spacing + 2.5)
         figsize = (12, height)
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -120,7 +130,7 @@ def horizontal_bar_means(stats_df: pd.DataFrame, title: str = "",
     color_fn = _div_color if colormap == 'diverging' else _seq_color
     bar_colors = [color_fn(v, vmin, vmax) for v in values]
 
-    bars = ax.barh(y_pos, values, color=bar_colors, edgecolor='white', height=0.7)
+    bars = ax.barh(y_pos, values, color=bar_colors, edgecolor='white', height=bar_height)
 
     # Value annotations
     x_margin = (vmax - vmin) * 0.02 if vmax > vmin else 0.1
@@ -194,8 +204,11 @@ def pie_chart(freq_df: pd.DataFrame, title: str = "",
 
 def frequency_bar(freq_df: pd.DataFrame, title: str = "",
                   horizontal: bool = True, figsize: tuple = None,
-                  show_n: bool = True) -> BytesIO:
-    """Bar chart for frequency distributions."""
+                  show_n: bool = True, row_spacing: float = 1.0,
+                  bar_height: float = 0.7) -> BytesIO:
+    """Bar chart for frequency distributions.
+    row_spacing: multiply vertical spacing between categories (e.g. 1.1 for A2).
+    """
     label_col = freq_df.columns[0]
     pct_col = '%' if '%' in freq_df.columns else '% wskazań'
     n_col = 'N' if 'N' in freq_df.columns else None
@@ -205,7 +218,7 @@ def frequency_bar(freq_df: pd.DataFrame, title: str = "",
 
     if figsize is None:
         if horizontal:
-            height = max(4, n_items * 0.55 + 2.5)
+            height = max(4, n_items * 0.55 * row_spacing + 2.5)
             figsize = (11, height)
         else:
             figsize = (max(8, n_items * 1.0 + 3), 6)
@@ -220,7 +233,7 @@ def frequency_bar(freq_df: pd.DataFrame, title: str = "",
 
     if horizontal:
         y_pos = np.arange(n_items)
-        bars = ax.barh(y_pos, values, color=bar_colors, edgecolor='white', height=0.7)
+        bars = ax.barh(y_pos, values, color=bar_colors, edgecolor='white', height=bar_height)
         for idx, (bar, val) in enumerate(zip(bars, values)):
             n_txt = ""
             if show_n and n_col and idx < len(df):
@@ -236,9 +249,12 @@ def frequency_bar(freq_df: pd.DataFrame, title: str = "",
     else:
         x_pos = np.arange(n_items)
         bars = ax.bar(x_pos, values, color=bar_colors, edgecolor='white', width=0.7)
-        for bar, val in zip(bars, values):
+        for idx, (bar, val) in enumerate(zip(bars, values)):
+            n_txt = ""
+            if show_n and n_col and idx < len(df):
+                n_txt = f"\n(n={int(df[n_col].iloc[idx])})"
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-                    f'{val:.1f}%', ha='center', va='bottom',
+                    f'{val:.1f}%{n_txt}', ha='center', va='bottom',
                     fontsize=FONT_ANNOT, color=COLORS['text_light'])
         ax.set_xticks(x_pos)
         ax.set_xticklabels(labels, fontsize=FONT_TICK, rotation=30, ha='right')
@@ -256,6 +272,260 @@ def frequency_bar(freq_df: pd.DataFrame, title: str = "",
     plt.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def grouped_bar_percent(pivot_df: pd.DataFrame, title: str = "",
+                        category_col: str = "Kategoria",
+                        figsize: tuple = None) -> BytesIO:
+    """
+    Grouped vertical bar chart: first column = category labels, rest = % per series (e.g. B5).
+    """
+    df = pivot_df.copy()
+    if df.empty or category_col not in df.columns:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "Brak danych", ha="center", va="center")
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    group_cols = [c for c in df.columns if c != category_col]
+    n_cats = len(df)
+    n_groups = len(group_cols)
+    if n_groups == 0:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "Brak danych", ha="center", va="center")
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    if figsize is None:
+        width = max(10, n_cats * max(1.2, 0.35 * n_groups + 0.5))
+        figsize = (width, 6.5)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(n_cats)
+    bar_w = 0.8 / max(n_groups, 1)
+    colors = CAT_PALETTE + PIE_PALETTE
+
+    for i, gcol in enumerate(group_cols):
+        vals = pd.to_numeric(df[gcol], errors="coerce").fillna(0.0).values
+        offset = (i - (n_groups - 1) / 2.0) * bar_w
+        ax.bar(
+            x + offset,
+            vals,
+            bar_w,
+            label=_wrap_label(str(gcol), 30),
+            color=colors[i % len(colors)],
+            edgecolor="white",
+            linewidth=0.5,
+        )
+
+    cat_labels = [_wrap_label(str(t), 45) for t in df[category_col].values]
+    ax.set_xticks(x)
+    ax.set_xticklabels(cat_labels, fontsize=FONT_TICK, rotation=22, ha="right")
+    ax.set_ylabel("%", fontsize=FONT_LABEL)
+    ax.set_ylim(0, max(100, float(np.nanmax(df[group_cols].values)) * 1.15) if n_cats else 100)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=FONT_LEGEND - 1, frameon=False)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", alpha=0.3)
+    ax.grid(axis="x", visible=False)
+
+    if title:
+        ax.set_title(title, fontsize=FONT_TITLE, fontweight="bold",
+                     color=COLORS["text"], pad=15, loc="left")
+
+    plt.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def grouped_bar_two_groups(
+    df: pd.DataFrame,
+    title: str = "",
+    category_col: str = "Kategoria",
+    value_cols: tuple[str, str] | None = None,
+    n_cols: tuple[str, str] | None = None,
+    legend_labels: tuple[str, str] | None = None,
+    ylabel: str = "%",
+    figsize: tuple = None,
+    bar_labels: bool = True,
+    horizontal: bool = False,
+) -> BytesIO:
+    """
+    Grouped bar chart: two series (np. % Świeccy vs Duchowni).
+    horizontal=False: słupki pionowe (kategorie na osi X).
+    horizontal=True: słupki poziome (czytelne przy wielu długich etykietach, np. B8a).
+    n_cols: optional (col_N_group1, col_N_group2) — etykiety jak frequency_bar: % i (n=…).
+    """
+    if df.empty or category_col not in df.columns:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "Brak danych", ha="center", va="center")
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    cols = [c for c in df.columns if c != category_col]
+    if value_cols is not None:
+        gcols = [value_cols[0], value_cols[1]]
+    else:
+        gcols = cols[:2]
+    if len(gcols) < 2:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "Brak danych", ha="center", va="center")
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    leg = legend_labels if legend_labels else (gcols[0], gcols[1])
+
+    n_cats = len(df)
+    n_groups = 2
+    colors = [CAT_PALETTE[0], CAT_PALETTE[1]]
+
+    if horizontal:
+        if figsize is None:
+            height = max(12, n_cats * 0.72 + 4.5)
+            figsize = (14, height)
+        fig, ax = plt.subplots(figsize=figsize)
+        y = np.arange(n_cats)
+        bar_h = 0.8 / max(n_groups, 1)
+        cat_labels = [_wrap_label(str(t), 55) for t in df[category_col].values]
+        xmax = float(np.nanmax(df[gcols].values)) if n_cats else 0.0
+        xlim_hi = max(100, xmax * 1.18) if ylabel == "%" else max(10, xmax * 1.18)
+        xlim_hi *= 1.12
+
+        for i, gcol in enumerate(gcols):
+            vals = pd.to_numeric(df[gcol], errors="coerce").fillna(0.0).values
+            offset = (i - (n_groups - 1) / 2.0) * bar_h
+            rects = ax.barh(
+                y + offset,
+                vals,
+                bar_h,
+                label=_wrap_label(str(leg[i]), 30),
+                color=colors[i % len(colors)],
+                edgecolor="white",
+                linewidth=0.5,
+            )
+            if bar_labels:
+                n_series = None
+                if n_cols is not None and n_cols[i] in df.columns:
+                    n_series = df[n_cols[i]]
+                for j, rect in enumerate(rects):
+                    val = vals[j]
+                    pct_sym = "%" if ylabel == "%" else ""
+                    txt = f"{val:.1f}{pct_sym}"
+                    if n_series is not None:
+                        nv = n_series.iloc[j]
+                        if pd.notna(nv):
+                            txt += f"  (n={int(nv)})"
+                    xend = rect.get_width()
+                    yc = rect.get_y() + rect.get_height() / 2
+                    pad = xlim_hi * 0.008
+                    ax.text(
+                        xend + pad, yc, txt,
+                        va="center", ha="left", fontsize=FONT_ANNOT - 1,
+                        color=COLORS["text_light"],
+                    )
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(cat_labels, fontsize=FONT_TICK)
+        ax.invert_yaxis()
+        ax.set_xlabel(ylabel, fontsize=FONT_LABEL)
+        ax.set_xlim(0, xlim_hi)
+        ax.legend(loc="lower right", fontsize=FONT_LEGEND, frameon=True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(axis="x", alpha=0.3)
+        ax.grid(axis="y", visible=False)
+        if title:
+            ax.set_title(title, fontsize=FONT_TITLE, fontweight="bold",
+                         color=COLORS["text"], pad=15, loc="left")
+        plt.tight_layout()
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    if figsize is None:
+        width = max(10, n_cats * max(1.2, 0.35 * n_groups + 0.5))
+        height = max(7.0, 5.0 + min(n_cats, 20) * 0.12)
+        figsize = (width, height)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(n_cats)
+    bar_w = 0.8 / max(n_groups, 1)
+
+    for i, gcol in enumerate(gcols):
+        vals = pd.to_numeric(df[gcol], errors="coerce").fillna(0.0).values
+        offset = (i - (n_groups - 1) / 2.0) * bar_w
+        rects = ax.bar(
+            x + offset,
+            vals,
+            bar_w,
+            label=_wrap_label(str(leg[i]), 30),
+            color=colors[i % len(colors)],
+            edgecolor="white",
+            linewidth=0.5,
+        )
+        if bar_labels:
+            n_series = None
+            if n_cols is not None and n_cols[i] in df.columns:
+                n_series = df[n_cols[i]]
+            for j, rect in enumerate(rects):
+                val = vals[j]
+                pct_sym = "%" if ylabel == "%" else ""
+                txt = f"{val:.1f}{pct_sym}"
+                if n_series is not None:
+                    nv = n_series.iloc[j]
+                    if pd.notna(nv):
+                        txt += f"\n(n={int(nv)})"
+                ax.annotate(
+                    txt,
+                    xy=(rect.get_x() + rect.get_width() / 2, rect.get_height()),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=FONT_ANNOT - 1,
+                    color=COLORS["text_light"],
+                )
+
+    cat_labels = [_wrap_label(str(t), 45) for t in df[category_col].values]
+    ax.set_xticks(x)
+    ax.set_xticklabels(cat_labels, fontsize=FONT_TICK, rotation=22, ha="right")
+    ax.set_ylabel(ylabel, fontsize=FONT_LABEL)
+    ymax = float(np.nanmax(df[gcols].values)) if n_cats else 0.0
+    y_top = max(100, ymax * 1.28) if ylabel == "%" else max(10, ymax * 1.28)
+    ax.set_ylim(0, y_top)
+    ax.legend(loc="upper left", fontsize=FONT_LEGEND, frameon=True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", alpha=0.3)
+    ax.grid(axis="x", visible=False)
+
+    if title:
+        ax.set_title(title, fontsize=FONT_TITLE, fontweight="bold",
+                     color=COLORS["text"], pad=15, loc="left")
+
+    plt.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -325,13 +595,31 @@ def comparison_bar(stats_df1: pd.DataFrame, stats_df2: pd.DataFrame,
                    label1: str = "Świeccy", label2: str = "Duchowni",
                    title: str = "", value_col: str = 'Średnia',
                    scale_min: float = None, scale_max: float = None,
-                   figsize: tuple = None) -> BytesIO:
-    """Side-by-side horizontal bar chart comparing two groups."""
-    merged = stats_df1[['Item', value_col]].merge(
-        stats_df2[['Item', value_col]], on='Item', how='outer', suffixes=('_1', '_2'))
+                   figsize: tuple = None, sort_by_mean: bool = True,
+                   font_scale: float = 1.0,
+                   title_wrap_chars: int = 64) -> BytesIO:
+    """Side-by-side horizontal bar chart comparing two groups (value + n jak w horizontal_bar_means)."""
+    fs = float(font_scale) if font_scale and font_scale > 0 else 1.0
+    ft_title = FONT_TITLE * fs
+    ft_tick = FONT_TICK * fs
+    ft_annot = FONT_ANNOT * fs
+    ft_leg = FONT_LEGEND * fs
+    m1 = stats_df1[['Item', value_col]].copy()
+    m1 = m1.rename(columns={value_col: f'{value_col}_1'})
+    m1['N_1'] = stats_df1['N'] if 'N' in stats_df1.columns else np.nan
+    m2 = stats_df2[['Item', value_col]].copy()
+    m2 = m2.rename(columns={value_col: f'{value_col}_2'})
+    m2['N_2'] = stats_df2['N'] if 'N' in stats_df2.columns else np.nan
+    merged = m1.merge(m2, on='Item', how='outer')
+    k1, k2 = f'{value_col}_1', f'{value_col}_2'
+    if sort_by_mean and len(merged) > 0:
+        sort_key = merged[[k1, k2]].mean(axis=1).fillna(
+            merged[k1].fillna(merged[k2])
+        )
+        merged = merged.iloc[np.argsort(-sort_key.values)].reset_index(drop=True)
     n = len(merged)
     if figsize is None:
-        height = max(5, n * 0.65 + 3)
+        height = max(5, n * 0.72 + 3.2)
         figsize = (12, height)
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -339,23 +627,62 @@ def comparison_bar(stats_df1: pd.DataFrame, stats_df2: pd.DataFrame,
     y_pos = np.arange(n)
     bh = 0.35
 
-    v1 = merged[f'{value_col}_1'].values
-    v2 = merged[f'{value_col}_2'].values
+    v1 = merged[k1].values
+    v2 = merged[k2].values
+    n1 = merged['N_1'].values
+    n2 = merged['N_2'].values
 
-    ax.barh(y_pos - bh/2, v1, bh, label=label1, color=CAT_PALETTE[0], edgecolor='white')
-    ax.barh(y_pos + bh/2, v2, bh, label=label2, color=CAT_PALETTE[1], edgecolor='white')
-
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=FONT_TICK)
-    ax.invert_yaxis()
-    ax.legend(loc='lower right', frameon=True, fontsize=FONT_LEGEND)
+    bars1 = ax.barh(y_pos - bh/2, v1, bh, label=label1, color=CAT_PALETTE[0], edgecolor='white')
+    bars2 = ax.barh(y_pos + bh/2, v2, bh, label=label2, color=CAT_PALETTE[1], edgecolor='white')
 
     if scale_min is not None and scale_max is not None:
-        ax.set_xlim(scale_min - 0.1, scale_max + (scale_max - scale_min) * 0.15)
+        vmin, vmax = float(scale_min), float(scale_max)
+    else:
+        concat = np.concatenate([v1, v2])
+        fin = concat[np.isfinite(concat)]
+        if len(fin) == 0:
+            vmin, vmax = 0.0, 1.0
+        else:
+            vmin, vmax = float(np.min(fin)), float(np.max(fin))
+    x_margin = (vmax - vmin) * 0.02 if vmax > vmin else 0.1
 
+    for i in range(n):
+        b1, b2 = bars1[i], bars2[i]
+        if not pd.isna(v1[i]):
+            txt = f'{v1[i]:.2f}'
+            if not pd.isna(n1[i]):
+                txt += f'  (n={int(n1[i])})'
+            ax.text(
+                b1.get_width() + x_margin, b1.get_y() + b1.get_height() / 2,
+                txt, va='center', ha='left', fontsize=ft_annot, color=COLORS['text_light'],
+            )
+        if not pd.isna(v2[i]):
+            txt = f'{v2[i]:.2f}'
+            if not pd.isna(n2[i]):
+                txt += f'  (n={int(n2[i])})'
+            ax.text(
+                b2.get_width() + x_margin, b2.get_y() + b2.get_height() / 2,
+                txt, va='center', ha='left', fontsize=ft_annot, color=COLORS['text_light'],
+            )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=ft_tick)
+    ax.invert_yaxis()
+    ax.legend(loc='lower right', frameon=True, fontsize=ft_leg)
+
+    if scale_min is not None and scale_max is not None:
+        ax.set_xlim(scale_min - 0.1, scale_max + (scale_max - scale_min) * 0.32)
+    else:
+        mx = np.nanmax(np.concatenate([v1, v2])) if n else 1.0
+        ax.set_xlim(0, mx * 1.45)
+
+    title_wrapped = ""
     if title:
-        ax.set_title(title, fontsize=FONT_TITLE, fontweight='bold',
-                      color=COLORS['text'], pad=15, loc='left')
+        title_wrapped = _wrap_title_text(title, max_chars_per_line=title_wrap_chars)
+        n_title_lines = max(1, title_wrapped.count("\n") + 1)
+        title_pad = 12 + 6 * (n_title_lines - 1)
+        ax.set_title(title_wrapped, fontsize=ft_title, fontweight='bold',
+                     color=COLORS['text'], pad=title_pad, loc='left')
 
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -363,6 +690,9 @@ def comparison_bar(stats_df1: pd.DataFrame, stats_df2: pd.DataFrame,
     ax.grid(axis='y', visible=False)
 
     plt.tight_layout()
+    if title_wrapped and "\n" in title_wrapped:
+        fig.subplots_adjust(top=min(0.97, 0.88 + 0.018 * title_wrapped.count("\n")))
+
     buf = BytesIO()
     fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
     plt.close(fig)

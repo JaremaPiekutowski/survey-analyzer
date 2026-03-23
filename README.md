@@ -79,7 +79,15 @@ python main.py demographic-report survey.xlsx --config config.yaml --output-dir 
 
 Generates a report with cross-tabulations by each categorical variable (e.g. gender, age, education). For each non-categorical question and each categorical dimension: crosstable, significance test (chi-square for categorical, Kruskal-Wallis for scales), 100% stacked bar or bar chart of means, and a one-sentence summary. Requires `categorical_questions` in config (or `is_demographic: true`).
 
-### 5. Comparison report (two surveys)
+### 5. Metric report (M* questions, unweighted)
+
+```bash
+python main.py metric-report survey.xlsx --config config.yaml --output-dir output
+```
+
+Frequency tables and charts for all **`single_choice` questions whose `id` starts with `M`**, using **raw counts** (no weight column). Output files: `{stem}_raport_metryczny.docx` and `{stem}_raport_metryczny.xlsx`.
+
+### 6. Comparison report (two surveys)
 
 ```bash
 python main.py compare laity.xlsx clergy.xlsx --label1 "Laity" --label2 "Clergy"

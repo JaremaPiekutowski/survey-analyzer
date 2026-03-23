@@ -20,6 +20,7 @@ QT_NUMERIC_SCALE = "numeric_scale"
 QT_LIKERT = "likert"
 QT_MULTI_CHOICE = "multiple_choice"
 QT_SINGLE_CHOICE = "single_choice"
+QT_YES_NO_MATRIX = "yes_no_matrix"
 QT_OPEN = "open_text"
 QT_META = "metadata"
 
@@ -43,8 +44,10 @@ META_KEYWORDS = [
     'makroregion', 'segmentacja', 'segment',
 ]
 EXCLUDE_KEYWORDS = ['inna, jaka', 'inne (jakie']
-DEMOGRAPHIC_QIDS = {'M1', 'M1a', 'M1b', 'M2a', 'M3', 'M4', 'M5', 'M6',
-                   'M7', 'M8', 'M9', 'M10', 'M11'}
+DEMOGRAPHIC_QIDS = {
+    'M1', 'M1a', 'M1b', 'M2a', 'M3', 'M4', 'M5', 'M6',
+    'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13',
+}
 EXCLUDE_QIDS = {'M2'}
 
 
@@ -64,6 +67,10 @@ class QuestionDef:
     parent_question: str = ""
     weight_column: Optional[str] = None
     notes: str = ""
+    sort_mode: str = "auto"
+    category_order: list = field(default_factory=list)
+    open_ended_columns: list = field(default_factory=list)
+    survey_profile: str = ""
 
 
 def load_xlsx(filepath: str, header_row: int = 0) -> pd.DataFrame:
@@ -151,6 +158,8 @@ def _infer_chart_type(qtype: str, n_categories: int = 0) -> str:
         return CT_HBAR_MEANS
     elif qtype == QT_MULTI_CHOICE:
         return CT_MULTI_BAR
+    elif qtype == QT_YES_NO_MATRIX:
+        return CT_FREQ_BAR
     elif qtype == QT_SINGLE_CHOICE:
         return CT_PIE if n_categories <= 3 else CT_FREQ_BAR
     return CT_FREQ_BAR
@@ -314,6 +323,38 @@ def parse_numeric_value(val) -> Optional[float]:
         return None
 
 
+def parse_yes_no_cell(val) -> Optional[float]:
+    """1 = Tak, 0 = Nie, None = brak / niejednoznaczne."""
+    if val is None:
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except (ValueError, TypeError):
+        pass
+    s = str(val).strip()
+    if s == '' or s.lower() in ('nan', 'none', '-'):
+        return None
+    sl = s.lower()
+    if sl in ('tak', 't', 'yes', 'true'):
+        return 1.0
+    if sl in ('nie', 'n', 'no', 'false'):
+        return 0.0
+    try:
+        f = float(s)
+        if f == 1.0:
+            return 1.0
+        if f == 0.0:
+            return 0.0
+    except (ValueError, TypeError):
+        pass
+    if 'tak' in sl and 'nie' not in sl[:5]:
+        return 1.0
+    if sl.startswith('nie'):
+        return 0.0
+    return None
+
+
 def get_numeric_data(df: pd.DataFrame, question: QuestionDef,
                      weight_col: Optional[str] = None) -> pd.DataFrame:
     result = {}
@@ -329,6 +370,8 @@ def get_numeric_data(df: pd.DataFrame, question: QuestionDef,
             parsed = series.apply(parse_numeric_value)
         elif question.question_type == QT_MULTI_CHOICE:
             parsed = series.apply(lambda x: 1 if str(x).strip() == 'MENTIONED' else 0)
+        elif question.question_type == QT_YES_NO_MATRIX:
+            parsed = series.apply(parse_yes_no_cell)
         else:
             parsed = series
         result[label] = parsed
@@ -354,23 +397,33 @@ def export_config(questions: list, output_path: str):
             qd['scale_labels'] = {k: v for k, v in sorted(q.scale_labels.items())}
         if q.special_values:
             qd['special_values'] = sorted(q.special_values)
+        if q.sort_mode and q.sort_mode != 'auto':
+            qd['sort_mode'] = q.sort_mode
+        if q.category_order:
+            qd['category_order'] = list(q.category_order)
+        if q.open_ended_columns:
+            qd['open_ended_columns'] = list(q.open_ended_columns)
+        if q.survey_profile:
+            qd['survey_profile'] = q.survey_profile
         config['questions'].append(qd)
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
     logger.info(f"  Config exported to {output_path}")
 
 
-def load_config(config_path: str) -> tuple[list, list | None]:
+def load_config(config_path: str) -> tuple[list, list | None, str]:
     """
     Load question config from YAML.
-    Returns (questions, categorical_questions).
+    Returns (questions, categorical_questions, survey_profile).
     categorical_questions is a list of question IDs to use as demographic breakdown dimensions,
     or None if not specified (caller should fall back to is_demographic).
+    survey_profile is optional root key (e.g. swieccy, duchowni).
     """
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     if not config or 'questions' not in config:
         raise ValueError(f"Invalid config: missing or empty 'questions' section in {config_path}")
+    survey_profile = str(config.get('survey_profile', '') or '')
     questions = []
     for qd in config['questions']:
         q = QuestionDef(
@@ -381,9 +434,42 @@ def load_config(config_path: str) -> tuple[list, list | None]:
             scale_labels=qd.get('scale_labels', {}),
             special_values=set(qd.get('special_values', [])),
             is_demographic=qd.get('is_demographic', False),
+            sort_mode=qd.get('sort_mode', 'auto'),
+            category_order=qd.get('category_order') or [],
+            open_ended_columns=qd.get('open_ended_columns') or [],
+            survey_profile=str(qd.get('survey_profile', '') or ''),
         )
         questions.append(q)
     categorical_ids = config.get('categorical_questions')
     if categorical_ids is not None:
         categorical_ids = [str(x).strip() for x in categorical_ids]
-    return (questions, categorical_ids)
+    return (questions, categorical_ids, survey_profile)
+
+
+def apply_survey_profile_transforms(df: pd.DataFrame, questions: list, profile: str) -> pd.DataFrame:
+    """Apply data transforms for a given survey profile (e.g. M2a merge for duchowni)."""
+    if profile != 'duchowni':
+        return df
+    df = df.copy()
+    for q in questions:
+        if q.id != 'M2a':
+            continue
+        col = df.columns[q.columns[0]]
+
+        def _merge_age(v):
+            s = str(v).strip().lower()
+            s_norm = s.replace('–', '-').replace('—', '-')
+            if 'do 34' in s_norm:
+                return 'do 34 lat'
+            if re.search(r'18\D*24', s_norm):
+                return 'do 34 lat'
+            if re.search(r'25\D*34', s_norm):
+                return 'do 34 lat'
+            if '18' in s and '24' in s:
+                return 'do 34 lat'
+            if '25' in s and '34' in s:
+                return 'do 34 lat'
+            return v
+
+        df[col] = df[col].map(_merge_age)
+    return df

@@ -47,10 +47,10 @@ def _set_cell_border(cell, **kwargs):
 class ReportBuilder:
     """Builds a DOCX survey report incrementally."""
     
-    def __init__(self, title: str = "Raport z badania ankietowego"):
+    def __init__(self, title: str = "Raport z badania ankietowego", subtitle: str = ""):
         self.doc = Document()
         self._setup_styles()
-        self._add_title_page(title)
+        self._add_title_page(title, subtitle)
     
     def _setup_styles(self):
         """Configure document styles."""
@@ -77,7 +77,7 @@ class ReportBuilder:
             section.left_margin = Cm(2.5)
             section.right_margin = Cm(2)
     
-    def _add_title_page(self, title: str):
+    def _add_title_page(self, title: str, subtitle: str = ""):
         """Add title page."""
         # Add spacing before title
         for _ in range(6):
@@ -89,6 +89,14 @@ class ReportBuilder:
         run.font.size = Pt(24)
         run.font.bold = True
         run.font.color.rgb = RGBColor.from_string('2E5B88')
+        
+        if subtitle:
+            p_sub = self.doc.add_paragraph()
+            p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_sub = p_sub.add_run(subtitle)
+            run_sub.font.size = Pt(16)
+            run_sub.font.bold = True
+            run_sub.font.color.rgb = RGBColor.from_string('3D5A80')
         
         p2 = self.doc.add_paragraph()
         p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -161,8 +169,12 @@ class ReportBuilder:
         self.doc.add_paragraph()  # spacing
         return table
     
-    def add_chart(self, chart_buf: BytesIO, width: float = 6.0):
-        """Add a chart image from BytesIO buffer."""
+    def add_chart(self, chart_buf: BytesIO, width: float = 6.0,
+                  page_break_before: bool = False):
+        """Add a chart image from BytesIO buffer.
+        page_break_before: put chart on a new page (avoids squeezing next to a table)."""
+        if page_break_before:
+            self.doc.add_page_break()
         p = self.doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run()
